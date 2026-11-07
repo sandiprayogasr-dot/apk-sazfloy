@@ -11,6 +11,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import com.example.editor.components.SmartFloatingCapsuleToolbar
+import com.example.editor.components.SelectionContext
+import com.example.editor.components.CollapsibleEditingPanel
+import com.example.ui.theme.SazfloyAccentPurple
+import com.example.ui.theme.SazfloySecondaryPurple
+import com.example.ui.theme.SazfloyCapsuleToolbarBg
+import com.example.ui.theme.SazfloyPlayhead
+import com.example.ui.theme.SazfloyBeatMarker
+import com.example.ui.theme.SazfloyBorderSubtle
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -237,8 +253,23 @@ fun VideoEditorScreen(
     var isMuted by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // Active tool tab
+    // Active tool tab and panel state
     var activeTab by remember { mutableStateOf(VideoEditorToolTab.CLIP_TRIM) }
+    var isPanelOpen by remember { mutableStateOf(false) }
+    var isCleanMode by remember { mutableStateOf(false) }
+    var selectedBeatMarkerMs by remember { mutableStateOf<Long?>(null) }
+    var isSnappingEnabled by remember { mutableStateOf(true) }
+
+    // Dynamic smart selection context for floating toolbar
+    val selectionContext = remember(selectedClipId, selectedAudioId, selectedTextId, selectedBeatMarkerMs) {
+        when {
+            selectedBeatMarkerMs != null -> SelectionContext.BEAT_MARKER
+            selectedAudioId != null -> SelectionContext.AUDIO
+            selectedTextId != null -> SelectionContext.TEXT
+            selectedClipId != null -> SelectionContext.VIDEO
+            else -> SelectionContext.GLOBAL
+        }
+    }
 
     // Export Dialog State
     var showExportDialog by remember { mutableStateOf(false) }
@@ -260,6 +291,8 @@ fun VideoEditorScreen(
             undoStack = (undoStack + currentProject).takeLast(25)
             redoStack = emptyList()
             currentProject = next
+            // Real Autosave at every edit action
+            onSaveProject(next)
         }
     }
 
@@ -356,10 +389,16 @@ fun VideoEditorScreen(
         }
     }
 
-    // Auto-save on exit
+    // BackHandler: Closes clean mode or open panel first, otherwise auto-saves and exits
     BackHandler {
-        onSaveProject(currentProject)
-        onNavigateBack()
+        if (isCleanMode) {
+            isCleanMode = false
+        } else if (isPanelOpen) {
+            isPanelOpen = false
+        } else {
+            onSaveProject(currentProject)
+            onNavigateBack()
+        }
     }
 
     fun seekToStart() {
@@ -533,8 +572,10 @@ fun VideoEditorScreen(
                     orientationMode = orientationMode,
                     canUndo = undoStack.isNotEmpty(),
                     canRedo = redoStack.isNotEmpty(),
+                    isCleanMode = isCleanMode,
                     onUndo = { performUndo() },
                     onRedo = { performRedo() },
+                    onToggleCleanMode = { isCleanMode = !isCleanMode },
                     onToggleOrientation = onToggleOrientation,
                     onAddMedia = { showAddMediaDialog = true },
                     onExport = { showExportDialog = true },
@@ -760,206 +801,470 @@ fun VideoEditorScreen(
                     }
                 }
             } else {
-                // PORTRAIT MODE: Preview top, Timeline middle, Editing tools bottom
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // 1. Preview Box
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1.1f)
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        VideoPreviewBox(
-                            project = currentProject,
-                            currentPlayheadMs = currentPlayheadMs,
-                            isPlaying = isPlaying,
-                            isMuted = isMuted,
-                            isFullscreen = isFullscreen,
-                            exoPlayer = exoPlayer,
-                            selectedTextId = selectedTextId,
-                            onSelectText = {
-                                selectedTextId = it
-                                activeTab = VideoEditorToolTab.TEXT
-                            },
-                            onUpdateText = { updated ->
-                                updateProject { proj ->
-                                    proj.copy(textOverlays = proj.textOverlays.map { if (it.id == updated.id) updated else it })
-                                }
-                            },
-                            onDeleteText = { textId ->
-                                updateProject { proj ->
-                                    proj.copy(textOverlays = proj.textOverlays.filter { it.id != textId })
-                                }
-                                if (selectedTextId == textId) selectedTextId = null
-                            },
-                            onSeekToStart = { seekToStart() },
-                            onTogglePlay = { togglePlayback() },
-                            onToggleMute = { isMuted = !isMuted },
-                            onToggleFullscreen = { isFullscreen = !isFullscreen },
-                            onUpdateClip = { updated ->
-                                updateProject { proj ->
-                                    proj.copy(clips = proj.clips.map { if (it.id == updated.id) updated else it })
-                                }
-                            }
-                        )
-                    }
-
-                    // 2. Multi-track Timeline
-                    TimelineComponent(
-                        totalDurationMs = currentProject.totalDurationMs,
-                        currentPlayheadMs = currentPlayheadMs,
-                        clips = currentProject.clips,
-                        selectedClipId = selectedClipId,
-                        textOverlays = currentProject.textOverlays,
-                        selectedTextId = selectedTextId,
-                        audioTracks = currentProject.audioTracks,
-                        selectedAudioId = selectedAudioId,
-                        shapeOverlays = currentProject.shapeOverlays,
-                        selectedShapeId = selectedShapeId,
-                        effects = currentProject.effects,
-                        selectedEffectId = selectedEffectId,
-                        onSeek = { currentPlayheadMs = it },
-                        onSelectClip = {
-                            selectedClipId = it
-                            activeTab = VideoEditorToolTab.CLIP_TRIM
-                        },
-                        onSelectText = {
-                            selectedTextId = it
-                            activeTab = VideoEditorToolTab.TEXT
-                        },
-                        onSelectAudio = {
-                            selectedAudioId = it
-                            activeTab = VideoEditorToolTab.AUDIO
-                        },
-                        onSelectShape = {
-                            selectedShapeId = it
-                            activeTab = VideoEditorToolTab.SHAPES
-                        },
-                        onSelectEffect = {
-                            selectedEffectId = it
-                            activeTab = VideoEditorToolTab.EFFECTS
-                        },
-                        onSelectTransition = {
-                            selectedClipId = it
-                            activeTab = VideoEditorToolTab.TRANSITION
-                        },
-                        onSplitClip = { clipId, atMs ->
-                            updateProject { it.splitClip(clipId, atMs) }
-                        },
-                        onDeleteClip = { clipId ->
-                            updateProject { it.deleteClip(clipId) }
-                            selectedClipId = currentProject.clips.firstOrNull()?.id
-                        },
-                        onDuplicateClip = { clipId ->
-                            updateProject { it.duplicateClip(clipId) }
-                        },
-                        onMoveClipLeft = { moveClipLeft(it) },
-                        onMoveClipRight = { moveClipRight(it) },
-                        onAddKeyframe = { addKeyframeAtPlayhead(it) },
-                        onAddMediaClick = {
-                            showAddMediaDialog = true
-                        },
-                        beatMarkersMs = currentProject.beatMarkersMs,
-                        onToggleBeatMarker = { toggleBeatMarker(it) },
-                        onAutoBeats = { autoGenerateBeats() },
-                        modifier = Modifier.height(180.dp)
-                    )
-
-                    // 3. Tool Tabs & Bottom Panel
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(SazfloySurface)
-                            .border(1.dp, SazfloyBorder)
-                    ) {
-                        VideoToolTabsRow(
-                            activeTab = activeTab,
-                            onSelectTab = { activeTab = it }
-                        )
-
+                // PORTRAIT MODE: Clean modern layout with floating capsule toolbar & collapsible bottom panel
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // 1. Preview Box (Upper Section)
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(180.dp)
-                                .background(SazfloySurfaceElevated)
-                                .padding(8.dp)
+                                .weight(if (isCleanMode) 1.55f else if (isPanelOpen) 0.85f else 1.2f)
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            VideoToolPanelContent(
-                                activeTab = activeTab,
+                            VideoPreviewBox(
                                 project = currentProject,
-                                selectedClip = selectedClip,
-                                selectedTextId = selectedTextId,
-                                selectedShapeId = selectedShapeId,
-                                selectedEffectId = selectedEffectId,
                                 currentPlayheadMs = currentPlayheadMs,
-                                onUpdateClip = { updatedClip ->
-                                    updateProject { proj ->
-                                        proj.copy(clips = proj.clips.map { if (it.id == updatedClip.id) updatedClip else it })
-                                    }
+                                isPlaying = isPlaying,
+                                isMuted = isMuted,
+                                isFullscreen = isFullscreen,
+                                exoPlayer = exoPlayer,
+                                selectedTextId = selectedTextId,
+                                onSelectText = {
+                                    selectedTextId = it
+                                    activeTab = VideoEditorToolTab.TEXT
+                                    isPanelOpen = true
                                 },
-                                onUpdateProject = { updateProject { it } },
-                                onUpdateAdjustments = { newAdj ->
-                                    updateProject { it.copy(adjustments = newAdj) }
-                                },
-                                onAddTextClick = { showAddTextDialog = true },
                                 onUpdateText = { updated ->
                                     updateProject { proj ->
                                         proj.copy(textOverlays = proj.textOverlays.map { if (it.id == updated.id) updated else it })
                                     }
                                 },
-                                onAddShape = { shape ->
-                                    updateProject { it.copy(shapeOverlays = it.shapeOverlays + shape) }
-                                },
-                                onRemoveShape = { shapeId ->
-                                    updateProject { it.copy(shapeOverlays = it.shapeOverlays.filter { it.id != shapeId }) }
-                                },
-                                onUpdateShape = { updated ->
+                                onDeleteText = { textId ->
                                     updateProject { proj ->
-                                        proj.copy(shapeOverlays = proj.shapeOverlays.map { if (it.id == updated.id) updated else it })
+                                        proj.copy(textOverlays = proj.textOverlays.filter { it.id != textId })
                                     }
+                                    if (selectedTextId == textId) selectedTextId = null
                                 },
-                                onAddEffect = { eff ->
-                                    updateProject { it.copy(effects = it.effects + eff) }
-                                    selectedEffectId = eff.id
-                                },
-                                onSelectEffect = { selectedEffectId = it },
-                                onUpdateEffect = { updated ->
+                                onSeekToStart = { seekToStart() },
+                                onTogglePlay = { togglePlayback() },
+                                onToggleMute = { isMuted = !isMuted },
+                                onToggleFullscreen = { isFullscreen = !isFullscreen },
+                                onUpdateClip = { updated ->
                                     updateProject { proj ->
-                                        proj.copy(effects = proj.effects.map { if (it.id == updated.id) updated else it })
+                                        proj.copy(clips = proj.clips.map { if (it.id == updated.id) updated else it })
                                     }
-                                },
-                                onRemoveEffect = { effId ->
-                                    updateProject { it.copy(effects = it.effects.filter { it.id != effId }) }
-                                    if (selectedEffectId == effId) selectedEffectId = null
-                                },
-                                onAddSticker = { emoji ->
-                                    updateProject {
-                                        it.copy(stickerOverlays = it.stickerOverlays + StickerOverlay(emojiOrTag = emoji, startMs = currentPlayheadMs))
-                                    }
-                                },
-                                onImportLutClick = { lutFilePickerLauncher.launch("*/*") },
-                                onApplyTitleTemplate = { template ->
-                                    val newOverlays = TitleTemplates.createTitleOverlays(template, currentPlayheadMs)
-                                    updateProject { it.copy(textOverlays = it.textOverlays + newOverlays) }
-                                    Toast.makeText(context, "Judul \"${template.name}\" berhasil dipasang!", Toast.LENGTH_SHORT).show()
-                                },
-                                onGenerateAutoCaptions = { style ->
-                                    val generated = AutoCaptionEngine.generateAutoCaptions(currentProject, style)
-                                    updateProject { it.copy(textOverlays = it.textOverlays + generated) }
-                                    Toast.makeText(context, "${generated.size} Subtitle otomatis berhasil dibuat!", Toast.LENGTH_SHORT).show()
-                                },
-                                onImportAudioClick = { audioPickerLauncher.launch("audio/*") },
-                                onMoveClipLeft = { moveClipLeft(it) },
-                                onMoveClipRight = { moveClipRight(it) },
-                                onMoveClipToFront = { moveClipToFront(it) },
-                                onMoveClipToEnd = { moveClipToEnd(it) },
-                                onToggleBeatMarker = { toggleBeatMarker(it) },
-                                onAutoBeats = { autoGenerateBeats() },
-                                onSeek = { currentPlayheadMs = it; exoPlayer.seekTo(it) }
+                                }
                             )
                         }
 
+                        // 2. Middle Multi-track Timeline with ruler, playhead, snapping, beat markers, waveforms
+                        TimelineComponent(
+                            totalDurationMs = currentProject.totalDurationMs,
+                            currentPlayheadMs = currentPlayheadMs,
+                            clips = currentProject.clips,
+                            selectedClipId = selectedClipId,
+                            textOverlays = currentProject.textOverlays,
+                            selectedTextId = selectedTextId,
+                            audioTracks = currentProject.audioTracks,
+                            selectedAudioId = selectedAudioId,
+                            shapeOverlays = currentProject.shapeOverlays,
+                            selectedShapeId = selectedShapeId,
+                            effects = currentProject.effects,
+                            selectedEffectId = selectedEffectId,
+                            onSeek = { currentPlayheadMs = it },
+                            onSelectClip = {
+                                selectedClipId = it
+                                selectedAudioId = null
+                                selectedTextId = null
+                                selectedBeatMarkerMs = null
+                            },
+                            onSelectText = {
+                                selectedTextId = it
+                                selectedClipId = null
+                                selectedAudioId = null
+                                selectedBeatMarkerMs = null
+                            },
+                            onSelectAudio = {
+                                selectedAudioId = it
+                                selectedClipId = null
+                                selectedTextId = null
+                                selectedBeatMarkerMs = null
+                            },
+                            onSelectShape = {
+                                selectedShapeId = it
+                                selectedClipId = null
+                                selectedAudioId = null
+                                selectedTextId = null
+                                selectedBeatMarkerMs = null
+                            },
+                            onSelectEffect = {
+                                selectedEffectId = it
+                                selectedClipId = null
+                                selectedAudioId = null
+                                selectedTextId = null
+                                selectedBeatMarkerMs = null
+                            },
+                            onSelectTransition = {
+                                selectedClipId = it
+                                activeTab = VideoEditorToolTab.TRANSITION
+                                isPanelOpen = true
+                            },
+                            onSplitClip = { clipId, atMs ->
+                                updateProject { it.splitClip(clipId, atMs) }
+                            },
+                            onDeleteClip = { clipId ->
+                                updateProject { it.deleteClip(clipId) }
+                                selectedClipId = currentProject.clips.firstOrNull()?.id
+                            },
+                            onDuplicateClip = { clipId ->
+                                updateProject { it.duplicateClip(clipId) }
+                            },
+                            onMoveClipLeft = { moveClipLeft(it) },
+                            onMoveClipRight = { moveClipRight(it) },
+                            onAddKeyframe = { addKeyframeAtPlayhead(it) },
+                            onAddMediaClick = {
+                                showAddMediaDialog = true
+                            },
+                            beatMarkersMs = currentProject.beatMarkersMs,
+                            selectedBeatMarkerMs = selectedBeatMarkerMs,
+                            onSelectBeatMarker = {
+                                selectedBeatMarkerMs = it
+                                selectedClipId = null
+                                selectedAudioId = null
+                                selectedTextId = null
+                            },
+                            onToggleBeatMarker = { toggleBeatMarker(it) },
+                            onAutoBeats = { autoGenerateBeats() },
+                            isSnappingEnabled = isSnappingEnabled,
+                            onToggleSnapping = { isSnappingEnabled = !isSnappingEnabled },
+                            modifier = Modifier.height(if (isPanelOpen) 180.dp else 235.dp)
+                        )
+
+                        // 3. Collapsible Bottom Panel (when user selects a feature from toolbar)
+                        AnimatedVisibility(
+                            visible = isPanelOpen && !isCleanMode,
+                            enter = slideInVertically { it } + fadeIn(),
+                            exit = slideOutVertically { it } + fadeOut()
+                        ) {
+                            CollapsibleEditingPanel(
+                                title = activeTab.label,
+                                subtitle = "Pengaturan ${activeTab.label}",
+                                onClose = { isPanelOpen = false },
+                                onReset = {
+                                    if (activeTab == VideoEditorToolTab.ADJUST) {
+                                        updateProject { it.copy(adjustments = ColorAdjustments()) }
+                                    }
+                                }
+                            ) {
+                                VideoToolPanelContent(
+                                    activeTab = activeTab,
+                                    project = currentProject,
+                                    selectedClip = selectedClip,
+                                    selectedTextId = selectedTextId,
+                                    selectedShapeId = selectedShapeId,
+                                    selectedEffectId = selectedEffectId,
+                                    currentPlayheadMs = currentPlayheadMs,
+                                    onUpdateClip = { updatedClip ->
+                                        updateProject { proj ->
+                                            proj.copy(clips = proj.clips.map { if (it.id == updatedClip.id) updatedClip else it })
+                                        }
+                                    },
+                                    onUpdateProject = { updateProject { it } },
+                                    onUpdateAdjustments = { newAdj ->
+                                        updateProject { it.copy(adjustments = newAdj) }
+                                    },
+                                    onAddTextClick = { showAddTextDialog = true },
+                                    onUpdateText = { updated ->
+                                        updateProject { proj ->
+                                            proj.copy(textOverlays = proj.textOverlays.map { if (it.id == updated.id) updated else it })
+                                        }
+                                    },
+                                    onAddShape = { shape ->
+                                        updateProject { it.copy(shapeOverlays = it.shapeOverlays + shape) }
+                                    },
+                                    onRemoveShape = { shapeId ->
+                                        updateProject { it.copy(shapeOverlays = it.shapeOverlays.filter { it.id != shapeId }) }
+                                    },
+                                    onUpdateShape = { updated ->
+                                        updateProject { proj ->
+                                            proj.copy(shapeOverlays = proj.shapeOverlays.map { if (it.id == updated.id) updated else it })
+                                        }
+                                    },
+                                    onAddEffect = { eff ->
+                                        updateProject { it.copy(effects = it.effects + eff) }
+                                        selectedEffectId = eff.id
+                                    },
+                                    onSelectEffect = { selectedEffectId = it },
+                                    onUpdateEffect = { updated ->
+                                        updateProject { proj ->
+                                            proj.copy(effects = proj.effects.map { if (it.id == updated.id) updated else it })
+                                        }
+                                    },
+                                    onRemoveEffect = { effId ->
+                                        updateProject { it.copy(effects = it.effects.filter { it.id != effId }) }
+                                        if (selectedEffectId == effId) selectedEffectId = null
+                                    },
+                                    onAddSticker = { emoji ->
+                                        updateProject {
+                                            it.copy(stickerOverlays = it.stickerOverlays + StickerOverlay(emojiOrTag = emoji, startMs = currentPlayheadMs))
+                                        }
+                                    },
+                                    onImportLutClick = { lutFilePickerLauncher.launch("*/*") },
+                                    onApplyTitleTemplate = { template ->
+                                        val newOverlays = TitleTemplates.createTitleOverlays(template, currentPlayheadMs)
+                                        updateProject { it.copy(textOverlays = it.textOverlays + newOverlays) }
+                                        Toast.makeText(context, "Judul \"${template.name}\" berhasil dipasang!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onGenerateAutoCaptions = { style ->
+                                        val generated = AutoCaptionEngine.generateAutoCaptions(currentProject, style)
+                                        updateProject { it.copy(textOverlays = it.textOverlays + generated) }
+                                        Toast.makeText(context, "${generated.size} Subtitle otomatis berhasil dibuat!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onImportAudioClick = { audioPickerLauncher.launch("audio/*") },
+                                    onMoveClipLeft = { moveClipLeft(it) },
+                                    onMoveClipRight = { moveClipRight(it) },
+                                    onMoveClipToFront = { moveClipToFront(it) },
+                                    onMoveClipToEnd = { moveClipToEnd(it) },
+                                    onToggleBeatMarker = { toggleBeatMarker(it) },
+                                    onAutoBeats = { autoGenerateBeats() },
+                                    onSeek = { currentPlayheadMs = it; exoPlayer.seekTo(it) }
+                                )
+                            }
+                        }
+
+                        // Bottom Spacer for Floating Toolbar clearance when panel is closed
+                        if (!isPanelOpen && !isCleanMode) {
+                            Spacer(modifier = Modifier.height(72.dp))
+                        }
+                    }
+
+                    // Smart Floating Capsule Toolbar at the bottom
+                    AnimatedVisibility(
+                        visible = !isPanelOpen && !isCleanMode,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp, start = 12.dp, end = 12.dp),
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut()
+                    ) {
+                        SmartFloatingCapsuleToolbar(
+                            context = selectionContext,
+                            onDeselect = {
+                                selectedClipId = null
+                                selectedAudioId = null
+                                selectedTextId = null
+                                selectedBeatMarkerMs = null
+                                selectedShapeId = null
+                                selectedEffectId = null
+                            },
+                            onSplit = {
+                                val clipId = selectedClipId ?: currentProject.clips.firstOrNull()?.id
+                                if (clipId != null) {
+                                    updateProject { it.splitClip(clipId, currentPlayheadMs) }
+                                }
+                            },
+                            onBeat = { toggleBeatMarker(currentPlayheadMs) },
+                            onSpeed = {
+                                activeTab = VideoEditorToolTab.SPEED_VOL
+                                isPanelOpen = true
+                            },
+                            onEffects = {
+                                activeTab = VideoEditorToolTab.EFFECTS
+                                isPanelOpen = true
+                            },
+                            onOverlay = {
+                                activeTab = VideoEditorToolTab.SHAPES
+                                isPanelOpen = true
+                            },
+                            onAdjust = {
+                                activeTab = VideoEditorToolTab.ADJUST
+                                isPanelOpen = true
+                            },
+                            onExport = { showExportDialog = true },
+                            onText = {
+                                activeTab = VideoEditorToolTab.TEXT
+                                isPanelOpen = true
+                            },
+                            onAudio = {
+                                activeTab = VideoEditorToolTab.AUDIO
+                                isPanelOpen = true
+                            },
+                            onSubtitles = {
+                                activeTab = VideoEditorToolTab.AUTO_CAPTIONS
+                                isPanelOpen = true
+                            },
+                            // Video specific actions
+                            onTrim = {
+                                activeTab = VideoEditorToolTab.CLIP_TRIM
+                                isPanelOpen = true
+                            },
+                            onCrop = {
+                                activeTab = VideoEditorToolTab.CANVAS_RATIO
+                                isPanelOpen = true
+                            },
+                            onAnimation = {
+                                activeTab = VideoEditorToolTab.KEYFRAMES
+                                isPanelOpen = true
+                            },
+                            onVolume = {
+                                activeTab = VideoEditorToolTab.SPEED_VOL
+                                isPanelOpen = true
+                            },
+                            onDeleteClip = {
+                                selectedClipId?.let { clipId ->
+                                    updateProject { it.deleteClip(clipId) }
+                                    selectedClipId = currentProject.clips.firstOrNull()?.id
+                                }
+                            },
+                            onDuplicateClip = {
+                                selectedClipId?.let { clipId ->
+                                    updateProject { it.duplicateClip(clipId) }
+                                }
+                            },
+                            onTransition = {
+                                activeTab = VideoEditorToolTab.TRANSITION
+                                isPanelOpen = true
+                            },
+                            // Audio specific actions
+                            onFadeIn = {
+                                selectedAudioId?.let { audioId ->
+                                    updateProject { proj ->
+                                        proj.copy(audioTracks = proj.audioTracks.map {
+                                            if (it.id == audioId) it.copy(fadeInMs = (it.fadeInMs + 500L).coerceIn(0L, 5000L)) else it
+                                        })
+                                    }
+                                    Toast.makeText(context, "Fade In disesuaikan", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onFadeOut = {
+                                selectedAudioId?.let { audioId ->
+                                    updateProject { proj ->
+                                        proj.copy(audioTracks = proj.audioTracks.map {
+                                            if (it.id == audioId) it.copy(fadeOutMs = (it.fadeOutMs + 500L).coerceIn(0L, 5000L)) else it
+                                        })
+                                    }
+                                    Toast.makeText(context, "Fade Out disesuaikan", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onNoiseReduction = {
+                                Toast.makeText(context, "Peredam bising audio aktif", Toast.LENGTH_SHORT).show()
+                            },
+                            onDeleteAudio = {
+                                selectedAudioId?.let { audioId ->
+                                    updateProject { proj ->
+                                        proj.copy(audioTracks = proj.audioTracks.filter { it.id != audioId })
+                                    }
+                                    selectedAudioId = null
+                                }
+                            },
+                            // Text specific actions
+                            onFont = {
+                                activeTab = VideoEditorToolTab.TEXT
+                                isPanelOpen = true
+                            },
+                            onColor = {
+                                activeTab = VideoEditorToolTab.TEXT
+                                isPanelOpen = true
+                            },
+                            onSize = {
+                                activeTab = VideoEditorToolTab.TEXT
+                                isPanelOpen = true
+                            },
+                            onPosition = {
+                                selectedTextId?.let { txtId ->
+                                    updateProject { proj ->
+                                        proj.copy(textOverlays = proj.textOverlays.map {
+                                            if (it.id == txtId) it.copy(posXRatio = 0.5f, posYRatio = 0.7f) else it
+                                        })
+                                    }
+                                }
+                            },
+                            onDuplicateText = {
+                                selectedTextId?.let { txtId ->
+                                    val item = currentProject.textOverlays.firstOrNull { it.id == txtId }
+                                    if (item != null) {
+                                        val duplicated = item.copy(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            posYRatio = (item.posYRatio + 0.08f).coerceIn(0.1f, 0.9f)
+                                        )
+                                        updateProject { it.copy(textOverlays = it.textOverlays + duplicated) }
+                                    }
+                                }
+                            },
+                            onDeleteText = {
+                                selectedTextId?.let { txtId ->
+                                    updateProject { proj ->
+                                        proj.copy(textOverlays = proj.textOverlays.filter { it.id != txtId })
+                                    }
+                                    selectedTextId = null
+                                }
+                            },
+                            // Beat marker actions
+                            onEditMarker = {
+                                selectedBeatMarkerMs?.let { ms ->
+                                    currentPlayheadMs = ms
+                                    Toast.makeText(context, "Playhead berpindah ke Beat: ${ms}ms", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onMoveMarkerLeft = {
+                                selectedBeatMarkerMs?.let { ms ->
+                                    val newMs = (ms - 100L).coerceAtLeast(0L)
+                                    updateProject { proj ->
+                                        val filtered = proj.beatMarkersMs.filter { it != ms }
+                                        proj.copy(beatMarkersMs = (filtered + newMs).sorted())
+                                    }
+                                    selectedBeatMarkerMs = newMs
+                                    currentPlayheadMs = newMs
+                                }
+                            },
+                            onMoveMarkerRight = {
+                                selectedBeatMarkerMs?.let { ms ->
+                                    val newMs = (ms + 100L).coerceAtMost(currentProject.totalDurationMs)
+                                    updateProject { proj ->
+                                        val filtered = proj.beatMarkersMs.filter { it != ms }
+                                        proj.copy(beatMarkersMs = (filtered + newMs).sorted())
+                                    }
+                                    selectedBeatMarkerMs = newMs
+                                    currentPlayheadMs = newMs
+                                }
+                            },
+                            onDeleteMarker = {
+                                selectedBeatMarkerMs?.let { ms ->
+                                    updateProject { proj ->
+                                        proj.copy(beatMarkersMs = proj.beatMarkersMs.filter { it != ms })
+                                    }
+                                    selectedBeatMarkerMs = null
+                                }
+                            },
+                            onClearAllMarkers = {
+                                updateProject { it.copy(beatMarkersMs = emptyList()) }
+                                selectedBeatMarkerMs = null
+                                Toast.makeText(context, "Semua beat marker telah dihapus", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+
+                    // Clean Editing Mode Floating Exit Badge
+                    if (isCleanMode) {
+                        Surface(
+                            onClick = { isCleanMode = false },
+                            shape = RoundedCornerShape(24.dp),
+                            color = SazfloyCapsuleToolbarBg,
+                            border = BorderStroke(1.dp, SazfloyAccentPurple),
+                            shadowElevation = 8.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 18.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    tint = SazfloyAccentPurple,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Keluar Clean Mode",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1277,8 +1582,10 @@ private fun VideoEditorTopBar(
     orientationMode: ScreenOrientationMode,
     canUndo: Boolean,
     canRedo: Boolean,
+    isCleanMode: Boolean = false,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onToggleCleanMode: () -> Unit = {},
     onToggleOrientation: (ScreenOrientationMode) -> Unit,
     onAddMedia: () -> Unit,
     onExport: () -> Unit,
@@ -1310,12 +1617,25 @@ private fun VideoEditorTopBar(
                 Text(
                     text = "Ratio: ${aspectRatio.label}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = SazfloyCyan
+                    color = SazfloyAccentPurple
                 )
             }
         }
 
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Clean Editing Mode Button
+            IconButton(
+                onClick = onToggleCleanMode,
+                modifier = Modifier.size(34.dp).testTag("video_editor_clean_mode_toggle")
+            ) {
+                Icon(
+                    imageVector = if (isCleanMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = "Clean Mode",
+                    tint = if (isCleanMode) SazfloyAccentPurple else SazfloyTextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
             // Undo Button
             IconButton(
                 onClick = onUndo,
@@ -1325,7 +1645,7 @@ private fun VideoEditorTopBar(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Undo,
                     contentDescription = "Undo",
-                    tint = if (canUndo) SazfloyCyan else SazfloyTextMuted,
+                    tint = if (canUndo) SazfloyAccentPurple else SazfloyTextMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1339,7 +1659,7 @@ private fun VideoEditorTopBar(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Redo,
                     contentDescription = "Redo",
-                    tint = if (canRedo) SazfloyCyan else SazfloyTextMuted,
+                    tint = if (canRedo) SazfloyAccentPurple else SazfloyTextMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1356,7 +1676,7 @@ private fun VideoEditorTopBar(
                 Icon(
                     imageVector = Icons.Default.ScreenRotation,
                     contentDescription = "Orientation",
-                    tint = SazfloyCyan,
+                    tint = SazfloyAccentPurple,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1364,20 +1684,27 @@ private fun VideoEditorTopBar(
             // Prominent Add Media Button
             Button(
                 onClick = onAddMedia,
-                colors = ButtonDefaults.buttonColors(containerColor = SazfloyToska, contentColor = SazfloyBackground),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SazfloySecondaryPurple.copy(alpha = 0.5f),
+                    contentColor = Color.White
+                ),
+                border = BorderStroke(1.dp, SazfloyAccentPurple.copy(alpha = 0.4f)),
                 shape = RoundedCornerShape(18.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                 modifier = Modifier.testTag("video_editor_add_media_topbar")
             ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(imageVector = Icons.Default.Add, contentDescription = null, tint = SazfloyAccentPurple, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(3.dp))
-                Text("+ Media", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                Text("+ Media", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = Color.White)
             }
 
             // Export Button
             Button(
                 onClick = onExport,
-                colors = ButtonDefaults.buttonColors(containerColor = SazfloyCyan, contentColor = SazfloyBackground),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SazfloyAccentPurple,
+                    contentColor = Color.Black
+                ),
                 shape = RoundedCornerShape(18.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 modifier = Modifier.testTag("video_editor_export_button")
@@ -1852,6 +2179,31 @@ private fun VideoPreviewBox(
             activeStickers.forEach { sticker ->
                 Box(modifier = Modifier.align(Alignment.Center)) {
                     Text(text = sticker.emojiOrTag, fontSize = 42.sp)
+                }
+            }
+
+            // Responsive Center Play/Pause Touch Overlay
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(if (isPlaying) Color.Transparent else Color.Black.copy(alpha = 0.50f))
+                    .border(
+                        1.dp,
+                        if (isPlaying) Color.Transparent else SazfloyAccentPurple.copy(alpha = 0.6f),
+                        CircleShape
+                    )
+                    .clickable { onTogglePlay() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (!isPlaying) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Play",
+                        tint = SazfloyAccentPurple,
+                        modifier = Modifier.size(32.dp)
+                    )
                 }
             }
         }

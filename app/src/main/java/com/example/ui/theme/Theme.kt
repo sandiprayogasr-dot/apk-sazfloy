@@ -1,26 +1,26 @@
 package com.example.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val SazfloyColorScheme = darkColorScheme(
-    primary = SazfloyCyan,
-    onPrimary = SazfloyBackground,
-    primaryContainer = SazfloySurfaceElevated,
-    onPrimaryContainer = SazfloyCyan,
-    secondary = SazfloyViolet,
+    primary = SazfloyAccentPurple,
+    onPrimary = Color.Black,
+    primaryContainer = SazfloySecondaryPurple,
+    onPrimaryContainer = Color.White,
+    secondary = SazfloySecondaryPurple,
     onSecondary = SazfloyTextPrimary,
     secondaryContainer = SazfloySurfaceVariant,
-    onSecondaryContainer = SazfloyVioletLight,
+    onSecondaryContainer = SazfloyAccentPurple,
     tertiary = SazfloyPink,
-    onTertiary = SazfloyTextPrimary,
+    onTertiary = Color.White,
     background = SazfloyBackground,
     onBackground = SazfloyTextPrimary,
     surface = SazfloySurface,
@@ -33,8 +33,8 @@ private val SazfloyColorScheme = darkColorScheme(
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true, // SAZFLOY default is professional dark studio theme
-    dynamicColor: Boolean = false, // Preserve dedicated brand aesthetic
+    darkTheme: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val view = LocalView.current
